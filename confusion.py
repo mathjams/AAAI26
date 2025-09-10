@@ -59,12 +59,6 @@ def load_confusion_from_csv(path_or_tag: str,
                             device: str = "cpu",
                             kind: str = "best",
                             run_dir: str = "mil_runs"):
-    """
-    Returns: (ckpt_or_None, shown_png_paths_list, tag)
-    - If confusion PNGs exist, they are displayed (in notebooks) and paths returned.
-    - If PNGs are missing but a checkpoint exists (with 'val_cm'), they are re-generated and saved.
-    - If a checkpoint exists, it's loaded (and mil_head is optionally restored to eval()).
-    """
     dir_, tag = _resolve_tag_and_dir(path_or_tag, run_dir=run_dir)
     cm_png, cm_norm_png, ckpt_path, _row_csv = _kind_to_paths(dir_, tag, kind)
 
@@ -104,10 +98,6 @@ def load_confusion_from_csv(path_or_tag: str,
     return ckpt, shown, tag
 
 def load_best_checkpoint(path_or_tag, mil_head, device="cpu", run_dir="mil_runs", kind="best"):
-    """
-    kind: "best" or "bestHinge"
-    Supports passing a CSV path directly.
-    """
     assert kind in ("best", "bestHinge")
     if str(path_or_tag).endswith(".csv"):
         ckpt, shown, tag = load_confusion_from_csv(path_or_tag, mil_head=mil_head, device=device, kind=kind, run_dir=run_dir)
