@@ -16,7 +16,6 @@ def duplicate_indices_classwise(indices, labels, pos_times: int = 3, neg_times: 
     return out
 
 def _pad_slice(seq: np.ndarray, s: int, L: int) -> Tuple[np.ndarray, np.ndarray]:
-    """Slice seq[s:s+L] with left-zero-padding if needed. Returns (win, mask)."""
     T = len(seq)
     if T >= s + L:
         win = seq[s:s+L]
