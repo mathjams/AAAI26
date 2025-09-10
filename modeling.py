@@ -3,7 +3,6 @@ import torch.nn as nn
 from transformers import PatchTSTConfig, PatchTSTModel
 import collator, mil
 
-# --- 1. Patched encoder builder ---
 def build_frozen_patchtst(
     repo_id: str = "namctin/patchtst_etth1_pretrain",
     num_input_channels: int = 2,
@@ -12,7 +11,7 @@ def build_frozen_patchtst(
     patch_stride: int = 1,
     d_model: int = None,
     use_cls_token: bool = True,
-    fine_tune_last_n_layers: int = 0,  # new arg
+    fine_tune_last_n_layers: int = 0, 
 ):
     cfg = PatchTSTConfig.from_pretrained(repo_id)
     cfg.num_input_channels = num_input_channels
@@ -27,11 +26,9 @@ def build_frozen_patchtst(
         repo_id, config=cfg, ignore_mismatched_sizes=True
     )
 
-    # freeze all first
     for p in model.parameters():
         p.requires_grad = False
 
-    # unfreeze last N transformer blocks if requested
     if fine_tune_last_n_layers and hasattr(model, "encoder"):
         blocks = list(model.encoder.layers) if hasattr(model.encoder, "layers") else []
         for b in blocks[-int(fine_tune_last_n_layers):]:
