@@ -41,12 +41,6 @@ def make_bag_windows_sliding(
     seed: Optional[int] = None,
     max_windows: Optional[int] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Deterministic (or jittered) sliding windows:
-      starts = [base, base+hop, ...] up to T-length; optionally also include last_start=T-length.
-    Examples:
-      length=100, hop=50 -> [0:100], [50:150], ...
-    """
     assert seq.ndim == 2 and seq.shape[1] == 2, "seq must be (T,2)"
     L = int(length); H = max(1, int(hop))
     T = seq.shape[0]
@@ -84,10 +78,6 @@ def make_bag_windows_random(
     seed: Optional[int] = None,
     with_replacement: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Sample K random windows uniformly over valid start positions.
-    Good as an augmentation alternative to fixed sliding grids.
-    """
     assert seq.ndim == 2 and seq.shape[1] == 2, "seq must be (T,2)"
     L = int(length)
     T = seq.shape[0]
@@ -116,12 +106,6 @@ def make_bag_windows(
     pad_short: bool = True,
     add_noise: float = 0.0,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    seq: (T, 2) numpy float32 array
-    Returns:
-      past_values:        (Ni, L, 2) float32
-      past_observed_mask: (Ni, L, 2) bool
-    """
     assert seq.ndim == 2 and seq.shape[1] == 2, "Each sequence must be (T, 2)"
     L = context_length
     T = len(seq)
@@ -167,9 +151,6 @@ def make_bag_batches(
     shuffle: bool = True,
     seed: int = 42,
 ) -> List[List[int]]:
-    """
-    Splits a list of bag indices into batches of size batch_size_bags (last batch may be smaller).
-    """
     idxs = list(bag_indices)
     if shuffle:
         rng = random.Random(seed)
