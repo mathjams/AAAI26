@@ -5,7 +5,6 @@ importlib.reload(evaluater)
 from collator import make_bag_windows
 
 def _ensure_T2(arr):
-    """Coerce to numpy (T,2). Accepts torch/np and (2,T)."""
     if hasattr(arr, "detach"):
         arr = arr.detach().cpu().numpy()
     else:
@@ -19,7 +18,6 @@ def _ensure_T2(arr):
     raise ValueError(f"Cannot coerce to (T,2); got {arr.shape}")
 
 def _as_1d(t):
-    """Return a 1-D torch tensor even if input is scalar (0-D)."""
     if torch.is_tensor(t):
         return t.reshape(1) if t.ndim == 0 else t
     return torch.as_tensor(t).reshape(-1)
@@ -37,7 +35,6 @@ def _compute_starts(T, L, stride, pad_short=True):
     return starts
 
 def _plot_bag_points_two_tone(seq_xy, s, e, out_png, title):
-    """Scatter-only 1×1 grid: red points in [s:e), blue elsewhere. No lines."""
     x, y = seq_xy[:, 0], seq_xy[:, 1]
     xc, yc = np.clip(x, 0.0, 1.0), np.clip(y, 0.0, 1.0)
     T = len(x)
@@ -69,7 +66,6 @@ def _plot_bag_points_two_tone(seq_xy, s, e, out_png, title):
     plt.close(fig)
 
 def _get_seq_by_id(seq_id, sequences, all_ids=None):
-    """Fetch sequences[seq_id] when sequences may be list/array/dict; supports mapping via all_ids."""
     if isinstance(sequences, dict):
         return sequences[seq_id]
     try:
@@ -81,7 +77,6 @@ def _get_seq_by_id(seq_id, sequences, all_ids=None):
         return sequences[id_to_idx[seq_id]]
 
 
-# ---- main routine ----------------------------------------------------------
 @torch.no_grad()
 def plot_all_correct_positive_bags(
     sequences,
@@ -98,7 +93,7 @@ def plot_all_correct_positive_bags(
     k: int = 1,
     threshold: float = 0.0,
     all_ids=None,
-    show_first: int = 8,   # display up to N images inline
+    show_first: int = 8,  
 ):
     os.makedirs(run_dir, exist_ok=True)
     out_dir = os.path.join(run_dir, "qual_plots")
@@ -107,37 +102,31 @@ def plot_all_correct_positive_bags(
     encoder_module.to(device).eval()
     mil_head_module.to(device).eval()
 
-    # focus on ASD-labeled validation bags only
     asd_val_ids = [int(i) for i in val_ids if int(labels_tensor[int(i)]) == 1]
     made = []
 
     print(f"[INFO] Scanning {len(asd_val_ids)} ASD-labelled validation bags...")
     for seq_id in asd_val_ids:
         try:
-            # 1) windows
             seq_xy = _ensure_T2(_get_seq_by_id(seq_id, sequences, all_ids=all_ids))
             pv, pm = make_bag_windows(
                 seq_xy, context_length=context_length, stride=stride, pad_short=pad_short, add_noise=0.0
-            )  # pv:(Ni,L,2)
+            )  
             if pv.shape[0] == 0:
                 print(f"  - skip seq {seq_id}: no windows")
                 continue
 
-            # 2) model forward
             out = encoder_module(past_values=pv.to(device), past_observed_mask=pm.to(device), return_dict=True)
             tokens = out.last_hidden_state
             inst_scores = _as_1d(mil_head_module(tokens).squeeze(-1))
 
-            # 3) bag prediction via top-k mean
             k_eff = max(1, min(k, inst_scores.numel()))
             topk_vals, _ = torch.topk(inst_scores, k_eff)
             bag_score = float(topk_vals.mean().item())
             pred = int(bag_score > threshold)
             if pred != 1:
-                # not a correctly identified positive
                 continue
 
-            # 4) locate top instance and map back to original indices
             top_inst_idx = int(torch.argmax(inst_scores).item())
             T = seq_xy.shape[0]; L = int(context_length)
             starts = _compute_starts(T, L, stride, pad_short=pad_short)
@@ -148,7 +137,6 @@ def plot_all_correct_positive_bags(
                 top_inst_idx = min(top_inst_idx, len(starts) - 1)
             s = int(starts[top_inst_idx]); e = int(min(s + L, T))
 
-            # 5) plot two-tone scatter
             base = f"bag{seq_id}_inst{top_inst_idx}"
             out_png = os.path.join(out_dir, f"{tag}_{base}_points_two_tone.png") if tag else os.path.join(out_dir, f"{base}_points_two_tone.png")
             _plot_bag_points_two_tone(
@@ -164,7 +152,6 @@ def plot_all_correct_positive_bags(
             print(f"  ! seq {seq_id}: error -> {ex}")
 
     print(f"[DONE] Generated {len(made)} plots in {out_dir}")
-    # Preview a few
     for item in made[:show_first]:
         print(f"  - {item}")
         try:
