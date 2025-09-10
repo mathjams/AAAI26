@@ -5,7 +5,6 @@ from typing import List, Tuple, Optional, Union, Dict
 from collator import make_bag_batches, make_bag_windows
 from transformers import PatchTSTModel
 import torch.nn.functional as F
-# ====== helper: pooled bag score (top-k or top-p) ======
 def _pool_scores_for_bag(scores_1d: torch.Tensor, k: int = 1, top_p: float = None) -> torch.Tensor:
     """
     scores_1d: (Ni,)
@@ -19,14 +18,13 @@ def _pool_scores_for_bag(scores_1d: torch.Tensor, k: int = 1, top_p: float = Non
         n_keep = max(1, int(np.ceil(top_p * Ni)))
         top_vals, _ = torch.topk(scores_1d, n_keep)
         return top_vals.mean()
-    # default: top-k
     k_eff = min(k, Ni)
     top_vals, _ = torch.topk(scores_1d, k_eff)
     return top_vals.mean()
 
 def hinge_loss_pm1(
-    scores: torch.Tensor,           # (B,)
-    labels_pm1: torch.Tensor,       # (B,) in {-1,+1}
+    scores: torch.Tensor,           
+    labels_pm1: torch.Tensor,      
     pos_weight: float = 1.0,
     neg_weight: float = 1.0,
     margin_pos: float = 1.0,
@@ -35,21 +33,18 @@ def hinge_loss_pm1(
     pos_mask = labels_pm1 > 0
     neg_mask = ~pos_mask
 
-    # pos loss: max(m_pos - s, 0) ; want s >= m_pos
     if pos_mask.any():
         pos_losses = torch.clamp(margin_pos - scores[pos_mask], min=0.0)
         pos_loss = pos_losses.mean()
     else:
         pos_loss = scores.new_tensor(0.0)
 
-    # neg loss: max(m_neg + s, 0) ; want s <= -m_neg
     if neg_mask.any():
         neg_losses = torch.clamp(margin_neg + scores[neg_mask], min=0.0)
         neg_loss = neg_losses.mean()
     else:
         neg_loss = scores.new_tensor(0.0)
 
-    # reweight between classes (stable even if a class is absent in a batch)
     denom = (pos_weight > 0) + (neg_weight > 0)
     return (pos_weight * pos_loss + neg_weight * neg_loss) / max(denom, 1)
 
@@ -59,9 +54,6 @@ def collect_bag_scores(
     context_length=64, stride=16, bags_per_batch=8, device="cpu",
     pad_short=True, k=1, top_p: float = None
 ):
-    """
-    Returns concatenated arrays: scores (num_bags,), labels01 (num_bags,)
-    """
     from collator import make_bag_batches, make_bag_windows
 
     encoder.to(device).eval()
@@ -102,18 +94,6 @@ def collect_bag_scores(
             sc = instance_scores[mask]
             bag_scores.append(_pool_scores_for_bag(sc, k=k, top_p=top_p))
         bag_scores = torch.stack(bag_scores)
-        """
-        bag_scores = []
-        for bi in range(B):
-            mask = (gids == bi)
-            if mask.any():
-                s = instance_scores[mask]
-                k_eff = min(k, s.numel())
-                bag_scores.append(torch.topk(s, k_eff).values.mean())
-            else:
-                bag_scores.append(torch.tensor(0.0, device=device))
-        bag_scores = torch.stack(bag_scores)  # (B,)
-        """
 
         all_scores.append(bag_scores.detach().cpu())
         all_labels.append((y_pm1 > 0).long().cpu())
@@ -123,26 +103,20 @@ def collect_bag_scores(
 def compute_bag_loss(bag_scores, y_pm1, *, loss_type="bce",
                      pos_weight=None, gamma_pos=0.0, gamma_neg=2.0,
                      alpha_pos=0.5, beta_f=1.0, eps=1e-8):
-    """
-    bag_scores: logits (B,)
-    y_pm1: labels in {-1,+1}
-    """
-    y01 = (y_pm1 > 0).float()  # (B,)
+    y01 = (y_pm1 > 0).float() 
 
     if loss_type == "bce":
-        # pos_weight: tensor([w]) or None
         return F.binary_cross_entropy_with_logits(
             bag_scores, y01, pos_weight=pos_weight
         )
 
     elif loss_type == "focal_asym":
-        # Asymmetric focal loss (good for class imbalance).
         p = torch.sigmoid(bag_scores)
         pos = - y01 * ((1 - p) ** gamma_pos) * torch.log(p.clamp_min(eps))
         neg = - (1 - y01) * (p ** gamma_neg) * torch.log((1 - p).clamp_min(eps))
         return (alpha_pos * pos + (1 - alpha_pos) * neg).mean()
 
-    elif loss_type == "f_beta":  # differentiable surrogate for Fβ
+    elif loss_type == "f_beta":  
         p = torch.sigmoid(bag_scores)
         tp = (p * y01).sum()
         fp = (p * (1 - y01)).sum()
@@ -151,7 +125,7 @@ def compute_bag_loss(bag_scores, y_pm1, *, loss_type="bce",
         recall    = tp / (tp + fn + eps)
         beta2 = beta_f * beta_f
         fbeta = (1 + beta2) * precision * recall / (beta2 * precision + recall + eps)
-        return 1 - fbeta  # maximize Fβ → minimize 1 - Fβ
+        return 1 - fbeta  
 
     elif loss_type == "hinge_weighted":
         pos_w = (pos_weight if pos_weight is not None else 1.0)
@@ -198,7 +172,7 @@ def train_one_epoch_manual_bag(
                 pad_short=pad_short, add_noise=add_noise
             )
             Ni = pv.shape[0]
-            if Ni == 0:  # safety for too-short sequences
+            if Ni == 0:  
                 L = context_length
                 pv = torch.zeros(1, L, 2, dtype=torch.float32)
                 pm = torch.zeros(1, L, 2, dtype=torch.bool)
@@ -209,40 +183,26 @@ def train_one_epoch_manual_bag(
             group_ids.append(torch.full((Ni,), bi, dtype=torch.long))
             batch_labels.append(labels_tensor[bag_id].item())
 
-        pv_batch = torch.cat(pv_list, dim=0).to(device)   # (N_total, L, C)
-        pm_batch = torch.cat(pm_list, dim=0).to(device)   # (N_total, L, C)
-        gids     = torch.cat(group_ids, dim=0).to(device) # (N_total,)
+        pv_batch = torch.cat(pv_list, dim=0).to(device)   
+        pm_batch = torch.cat(pm_list, dim=0).to(device)   
+        gids     = torch.cat(group_ids, dim=0).to(device)
         B        = len(b_ids)
-        y_pm1    = torch.tensor(batch_labels, dtype=torch.float32, device=device)  # (B,)
+        y_pm1    = torch.tensor(batch_labels, dtype=torch.float32, device=device) 
 
         with torch.no_grad():
             out = encoder(past_values=pv_batch, past_observed_mask=pm_batch, return_dict=True)
-            tokens = out.last_hidden_state  # (N_total, T_tokens, D)
+            tokens = out.last_hidden_state 
 
-        instance_scores = mil_head(tokens)  # already (N_total,)
+        instance_scores = mil_head(tokens)  
         assert instance_scores.dim() == 1 and instance_scores.size(0) == pv_batch.size(0), \
             f"{instance_scores.shape=} vs {pv_batch.shape=}"
-        # Aggregate per bag via top-k mean
         bag_scores = []
         for bi in range(B):
             mask = (gids == bi)
             sc = instance_scores[mask]
             bag_scores.append(_pool_scores_for_bag(sc, k=k, top_p=locals().get("top_p", None)))
         bag_scores = torch.stack(bag_scores)        
-        """
-        bag_scores = []
-        for bi in range(B):
-            mask = (gids == bi)
-            if mask.any():
-                scores = instance_scores[mask]
-                k_eff = min(k, scores.numel())
-                topk_vals, _ = torch.topk(scores, k_eff)
-                bag_scores.append(topk_vals.mean())
-            else:
-                bag_scores.append(torch.tensor(0.0, device=device))
-        bag_scores = torch.stack(bag_scores)  # (B,)
-        """
-        pos_w_val = None  # or a float as above
+        pos_w_val = None 
         pos_w = torch.tensor([pos_w_val], device=bag_scores.device) if pos_w_val else None
         loss = hinge_loss_pm1(bag_scores, y_pm1,
                           pos_weight=pos_weight, neg_weight=neg_weight,
@@ -257,7 +217,6 @@ def train_one_epoch_manual_bag(
     return total_loss / max(1, total_bags)
 
 def _safe_auc(labels_np: np.ndarray, scores_np: np.ndarray) -> Tuple[float, float]:
-    """ROC-AUC and PR-AUC; returns NaN if not computable."""
     try:
         from sklearn.metrics import roc_auc_score, average_precision_score
         roc = roc_auc_score(labels_np, scores_np) if len(np.unique(labels_np)) == 2 else float("nan")
@@ -285,12 +244,6 @@ def evaluate_manual_bag(
     margin_pos: float = 1.0, margin_neg: float = 1.0,
 ) -> Union[Tuple[float, float],
            Tuple[float, float, np.ndarray, Dict[str, float]]]:
-    """
-    Returns:
-      val_hinge, val_acc
-      (+ confusion matrix [[TN FP],[FN TP]] and metrics dict if return_confusion=True)
-    Metrics: precision, recall, specificity, balanced_acc, roc_auc, pr_auc
-    """
     encoder.to(device).eval()
     mil_head.to(device).eval()
 
@@ -325,17 +278,14 @@ def evaluate_manual_bag(
         pm_batch = torch.cat(pm_list, dim=0).to(device)
         gids     = torch.cat(group_ids, dim=0).to(device)
         B        = len(b_ids)
-        y_pm1    = torch.tensor(batch_labels, dtype=torch.float32, device=device)  # (B,)
+        y_pm1    = torch.tensor(batch_labels, dtype=torch.float32, device=device)  
 
         out = encoder(past_values=pv_batch, past_observed_mask=pm_batch, return_dict=True)
-        tokens = out.last_hidden_state            # (N_total, T, D)
-        instance_scores = mil_head(tokens)  # already (N_total,)
+        tokens = out.last_hidden_state          
+        instance_scores = mil_head(tokens) 
         assert instance_scores.dim() == 1 and instance_scores.size(0) == pv_batch.size(0), \
             f"{instance_scores.shape=} vs {pv_batch.shape=}"
-        # (N_total,)
 
-
-        # Aggregate per bag via top-k mean (match training)
         bag_scores_list = []
         for bi in range(B):
             mask = (gids == bi)
@@ -346,30 +296,26 @@ def evaluate_manual_bag(
                 bag_scores_list.append(topk_vals.mean())
             else:
                 bag_scores_list.append(torch.tensor(0.0, device=device))
-        bag_scores = torch.stack(bag_scores_list)  # (B,)
+        bag_scores = torch.stack(bag_scores_list)  
 
-        # Hinge loss on ±1 labels
-        pos_w_val = None  # or a float as above
+        pos_w_val = None  =
         pos_w = torch.tensor([pos_w_val], device=bag_scores.device) if pos_w_val else None
         loss = hinge_loss_pm1(bag_scores, y_pm1,
                            pos_weight=pos_weight, neg_weight=neg_weight,
                            margin_pos=margin_pos, margin_neg=margin_neg)
         total_hinge += loss.item() * B
 
-        # Convert to {0,1} labels and predictions using SAME decision rule
-        targets = (y_pm1 > 0).long()                  # (B,)
-        preds   = (bag_scores > threshold).long()     # (B,)
+        targets = (y_pm1 > 0).long()                  
+        preds   = (bag_scores > threshold).long()    
 
         total_acc  += (preds == targets).sum().item()
         total_bags += B
 
-        # Confusion counts
         tp += ((preds == 1) & (targets == 1)).sum().item()
         tn += ((preds == 0) & (targets == 0)).sum().item()
         fp += ((preds == 1) & (targets == 0)).sum().item()
         fn += ((preds == 0) & (targets == 1)).sum().item()
 
-        # For AUCs, keep raw scores and labels
         all_scores.append(bag_scores.detach().cpu())
         all_labels.append(targets.detach().cpu())
 
@@ -379,12 +325,11 @@ def evaluate_manual_bag(
     if not return_confusion:
         return val_hinge, val_acc
 
-    # Build confusion matrix and metrics
     cm = np.array([[tn, fp],
                    [fn, tp]], dtype=int)
 
     precision     = tp / max(tp + fp, 1)
-    recall        = tp / max(tp + fn, 1)          # sensitivity
+    recall        = tp / max(tp + fn, 1)       
     specificity   = tn / max(tn + fp, 1)
     balanced_acc  = 0.5 * (recall + specificity)
 
